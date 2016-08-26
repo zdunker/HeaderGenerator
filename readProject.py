@@ -20,7 +20,14 @@ def getFiles(projectFile, sourceList, headerList):
         elif '<ClInclude Include=' in line:
             mo = projectIncludeFileSyntax.search(line)
             headerList.append(mo.group(1))            
-        
+
+
+#Known side cases to be considered:
+#    There are some sources or headers are included or excluded from certain build
+#    In addition, some files are also included while customBuild option is on
+#    During resource compiling, there are some additional include directories
+
+
 #if __name__ == "__main__":
 #    sourceList = []
 #    headerList = []
