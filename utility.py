@@ -1,5 +1,4 @@
 import os
-from __builtin__ import True
 
 #parse file's full path and retrieve its location folder
 #C:\Users\STAR\Desktop\3rd_party_libraries\Xerces-c\build\..\projects\Win32\VC14\xerces-all\XercesLib\XercesLib.vcxproj
