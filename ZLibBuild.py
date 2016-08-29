@@ -2,6 +2,7 @@ import tarfile
 import argparse
 import os
 import subprocess as sub
+import win32api
 
 def sanityCheck(szRootPath, szPlatform, szTarVersion):
     if None in (szRootPath, szPlatform, szTarVersion):
@@ -16,14 +17,6 @@ def sanityCheck(szRootPath, szPlatform, szTarVersion):
         print 'Specified ZLib source path is not file: %s' % szTarFile
         exit(-1)
 
-    #if os.path.isdir(szBuildDir):
-    #    print 'Try to remove output directory: %s' % szBuildDir
-    #    removeTree(szBuildDir)
-
-    #if os.path.isdir(szToPerforceDir):
-    #    print 'Try to remove submit directory: %s' % szToPerforceDir
-    #    removeTree(szToPerforceDir)
-
     print 'Create build submit directory: %s' % szToPerforceDir
     os.mkdir(szToPerforceDir)
 
@@ -31,10 +24,11 @@ def sanityCheck(szRootPath, szPlatform, szTarVersion):
 
 
 def extractSource(szTarFile, toWhere, mode):
+    toWhere = toWhere+'.'+mode
     try:
-        print 'Extract source: %s' % szTarFile
-        tar = tarfile.open(szTarFile, "r:gz")
-        tar.extractall(toWhere+'.'+mode)
+        print 'Extracting source: %s to %s' % (szTarFile, toWhere)
+        tar = tarfile.open(szTarFile)
+        tar.extractall(toWhere)
         tar.close()
     except:
         print "Extract source zip file exception, exit."
@@ -42,7 +36,9 @@ def extractSource(szTarFile, toWhere, mode):
 
 def modifyMakeFile(szBuildDir, mode, szBuildType):      #build type is dynamic or static
     szMakeFile = r'win32\Makefile.msc'
+    szToFile = r'win32\MakefileCM.msc'
     szFileFullPath = os.path.join(szBuildDir,szMakeFile)
+    szFileFullPath2 = os.path.join(szBuildDir,szToFile)
     
     oldASFlag = 'ASFLAGS = -coff -Zi $(LOC)'
     newASFlag = 'ASFLAGS = -safeseh -coff -Zi $(LOC)'
@@ -64,29 +60,48 @@ def modifyMakeFile(szBuildDir, mode, szBuildType):      #build type is dynamic o
             newCFlag = 'CFLAGS  = -nologo -MTd -W4 -GS -Od -Oy- -Zi -Fd"zlib" $(LOC)'
             s = s.replace(oldCFlag, newCFlag)
             
-    f = open(szFileFullPath, 'w')
+    f = open(szFileFullPath2, 'w')
     f.write(s)
     f.close()
+    print 'File created: %s'%(szFileFullPath2)
     
-def getMSVCTool(szPlatform):
-    vcVersion = szPlatform.split('-')[2][-2:]
-    guessToolPath = r'C:\Program Files (x86)\Microsoft Visual Studio {}.0\VC\vcvarsall.bat'.format(vcVersion)
-    guessToolPath2 = r'C:\Program Files\Microsoft Visual Studio {}.0\VC\vcvarsall.bat'.format(vcVersion)
-    if os.path.isfile(guessToolPath):
-        return guessToolPath
-    elif os.path.isdir(guessToolPath2):
-        return guessToolPath2
-    print "MSVC Tool not found on guessed path, exit."
-    exit(-1)
+def getVcShortPath(arg_platform):
+    fileList = []
+    vc_long_path = None
+    if "x86" in arg_platform: 
+        fileList = getLongPath("vcvars32.bat", r"C:\\Program Files")
+        if len(fileList) == 0 : 
+            fileList = getLongPath("vcvars32.bat", r"C:\\Program Files (x86)")
 
-def getToolArg(szPlatform):
-    if 'x86' in szPlatform:
-        return 'x86'
-    elif 'x64' in szPlatform:
-        return 'amd64'
-    else:
-        print 'Unable to retrieve argument from %s, exit.'%(szPlatform)
+    if "x64" in arg_platform: 
+        fileList = getLongPath("vcvars64.bat", r"C:\\Program Files (x86)")
+    
+    #Parse vc version from platform, like x86-win32-vc11
+    vc_version = arg_platform.split('-')[2][-2:]
+    for path in fileList:
+        if ("Visual Studio " + vc_version) in path: 
+            vc_long_path = path 
+            print "VC long path is: %s" % vc_long_path
+            break
+
+    if vc_long_path is not None:
+        return getShortPath(vc_long_path)
+    else: 
+        print "Can not find the required VC path. Exit"
         exit(-1)
+
+
+#Note: search in C:\ could be very long time, suggest to specify root_dir
+def getLongPath(file_name, root_dir = r'c:\\'): 
+    fileList = []
+    for root, dirs, files in os.walk(root_dir):
+        for name in files:
+            if name == file_name:
+                fileList.append(os.path.join(root, name))
+    return fileList
+
+def getShortPath(long_file_name):
+    return win32api.GetShortPathName(long_file_name)
 
 def getNMakeArg(mode, szPlatform):
     if 'x86' in szPlatform:
@@ -104,21 +119,20 @@ def getNMakeArg(mode, szPlatform):
         exit(-1)
 
 def buildZlibByBuildType(szBuildDir, szPlatform, mode, szBuildType):
-    szMSVCTool = getMSVCTool(szPlatform)
+    szVCPath = os.path.splitext(getVcShortPath(szPlatform))[0]
     modifyMakeFile(szBuildDir, mode, szBuildType)
         
-    makefile  = r'win32\Makefile.msc'
-    szToolArg = getToolArg(szPlatform)
+    makefile  = r'win32\MakefileCM.msc'
     szMakeArg = getNMakeArg(mode,szPlatform)
     
     cmdline = ["cmd", "/q", "/k", "echo off"]
     conn = sub.Popen(cmdline, stdin=sub.PIPE,shell=True,cwd=szBuildDir)
     batch = b"""\
-    call %s %s
+    call %s
     nmake -f %s %s
     
     exit
-    """ % (szMSVCTool, szToolArg, makefile, szMakeArg)
+    """ % (szVCPath, makefile, szMakeArg)
     print "To build Zlib by command batch: %s" % batch   
     conn.stdin.write(batch)
     conn.stdin.flush() # Must include this to ensure data is passed to child process
@@ -130,13 +144,15 @@ def copyAndRename(szBuildDir, szToPerforceDir, mode, szThreadType):
                       'zlib1_'+szThreadType+'.dll',
                       'zlib_' +szThreadType+'.pdb',
                       'zlib1_'+szThreadType+'.pdb']
-    if not os.path.isdir(os.path.join(szToPerforceDir,mode)):
-        os.mkdir(os.path.join(szToPerforceDir,mode))
+    if not os.path.isdir(os.path.join(szToPerforceDir,mode+'\\lib')):
+        batch = 'md %s'%(os.path.join(szToPerforceDir,mode+'\\lib'))
+        os.system(batch)
     for i in range(len(targetFileList)):
         fromWhere = os.path.join(szBuildDir,targetFileList[i])
-        toWhere = os.path.join(os.path.join(szToPerforceDir,mode), destFileList[i])
+        toWhere = os.path.join(os.path.join(szToPerforceDir,mode+'\\lib'), destFileList[i])
         batch = 'copy %s %s'%(fromWhere, toWhere)
         try:
+            print batch
             os.system(batch)
         except:
             print 'Unable to copy %s, exit.'%(fromWhere)
@@ -150,12 +166,27 @@ def wipeBuild(szBuildDir):
         print 'Unable to wipe %s'%(szBuildDir)
         exit(-1)
 
+def copyHeaders(szBuildDirWithMode,szToPerforceDir):
+    headers = ['zlib.h','zconf.h']
+    if os.path.isdir(os.path.join(szToPerforceDir,'include')):
+        #headers already copied
+        return
+    batch = 'md %s'%(os.path.join(szToPerforceDir,'include'))
+    os.system(batch)
+    for header in headers:
+        szHeaderInSource = os.path.join(szBuildDirWithMode, header)
+        szHeaderToPerforce = os.path.join(szToPerforceDir,'include')
+        batch = 'copy %s %s'%(szHeaderInSource, szHeaderToPerforce)
+        print batch
+        os.system(batch)
+
 def buildZlibByConfig(szTarFile, szBuildDir, szToPerforceDir, szPlatform, mode, szThreadType):
     extractSource(szTarFile, szBuildDir, mode)
     szBuildDirWithMode = szBuildDir + '.' + mode
+    copyHeaders(szBuildDirWithMode,szToPerforceDir)
     buildZlibByBuildType(szBuildDirWithMode, szPlatform, mode, szThreadType)
-    copyAndRename(szBuildDir, szToPerforceDir, mode, szThreadType)
-    wipeBuild(szBuildDir)
+    copyAndRename(szBuildDirWithMode, szToPerforceDir, mode, szThreadType)
+    wipeBuild(szBuildDirWithMode)
 
 def getArgs():
     parser = argparse.ArgumentParser(prog='ZLibBuild', usage='%(prog)s [options]', description='Process ZLib build on Windows')
