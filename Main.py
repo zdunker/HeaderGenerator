@@ -5,79 +5,85 @@
 import argparse
 import re
 import os
+import shutil
+import time
 
-slnFileSyntax = re.compile(r'''Project(\(\S+\)) = \"(.*?)\", \"(.*?)\"''')#group2 contains location
+slnFileSyntax = re.compile(r'''Project(\(\S+\)) = \"(.*?)\", \"(.*?)\"''')#group3 contains location
 projectSourceFileSyntax = re.compile(r'''<ClCompile Include="(.*?)"''')#group1 contains location
 includeSyntax = re.compile(r'''^#include [<|"](.*?)[>|"]''')#group1 contains location
-sourceSuffixList = ('.c','.cc','.cpp')
+sourceSuffixes = (".c",".cc",".cpp")
 
 def getProjects(solutionFile):
-    retList = []
-    solutionDir = getFileDir(solutionFile)
+    projectList = []
+    solutionDir = os.path.dirname(solutionFile)
+    
+    if not os.path.exists(solutionFile):
+        print "%s does not exits, exit"%(solutionFile)
+        exit(-1)
+    
     with open(solutionFile) as rf:
-        szSlnContent = rf.readlines()
-    for line in szSlnContent:
-        if 'Project(' in line:
+        slnContent = rf.readlines()
+    for line in slnContent:
+        if "Project(" in line:
             mo = slnFileSyntax.search(line)
-            if mo.group(3) and os.path.isfile(os.path.join(solutionDir,mo.group(3))):
-                retList.append(os.path.normpath(os.path.join(solutionDir,mo.group(3))))
-    return retList
+            if os.path.exists(os.path.join(solutionDir,mo.group(3))):
+                projectList.append(os.path.normpath(os.path.join(solutionDir,mo.group(3))))
+            else:
+                print "Notice: %s can not be found"%(os.path.join(solutionDir,mo.group(3)))
+                
+    return projectList
 
 def getFiles(projectFile):
     sourceList = []
-    projectDir = getFileDir(projectFile)
+    projectDir = os.path.dirname(projectFile)
+    
+    if not os.path.exists(projectFile):
+        print "%s does not exits, exit"%(projectFile)
+        exit(-1)
+    
     with open(projectFile) as rf:
         projectContent = rf.readlines()
     for line in projectContent:
-        if '<ClCompile Include=' in line:
+        if "<ClCompile Include=" in line:
             mo = projectSourceFileSyntax.search(line)
-            sourceList.append(os.path.normpath(os.path.join(projectDir,mo.group(1))))
+            if os.path.exists(os.path.join(projectDir,mo.group(1))):
+                sourceList.append(os.path.normpath(os.path.join(projectDir,mo.group(1))))
+            else:
+                print "Notice: %s can not be found"%(os.path.join(projectDir,mo.group(1)))
+                
     return sourceList
 
-def isFolder(location):
-    if os.path.isdir(location):
-        return True
-    return False
-
-def isSolution(location):
-    if location.endswith('.sln'):
-        return True
-    return False
-
-def isProject(location):
-    if location.endswith('.vcxproj'):
-        return True
-    return False
-
-def getFileDir(szFile):
-    return os.path.dirname(szFile)
+def determineLocation(location, suffix=''):
+    if not suffix:
+        return os.path.isdir(location)
+    else:
+        return location.endswith(suffix)
 
 def getSourceList(fileLocation):
     sourceList = []
     for root, dirs, files in os.walk(fileLocation):
         for file in files:
-            if file.endswith(sourceSuffixList):
+            if file.endswith(sourceSuffixes):
                 sourceList.append(os.path.join(root,file))
     return sourceList
 
-def getHeaderList(szSourceList):
-    szHeaderList = []
-    for source in szSourceList:
-        szHeaderList += getHeaders(source, root)
-    return list(set(szHeaderList))
+def getHeaderList(sourceList, root):
+    headerList = []
+    for source in sourceList:
+        headerList += getHeaders(source, root)
+    return list(set(headerList))
 
-def getProjectsSources(szProjectList):
-    szSourcelist = []
-    for project in szProjectList:
-        szSourcelist += getFiles(project)
-    szSourcelist = list(set(szSourcelist))
-    return szSourcelist
+def getProjectsSources(projectList):
+    sourcelist = []
+    for project in projectList:
+        sourcelist += getFiles(project)
+    return list(set(sourcelist))
 
 #To use this recursive function: source you are passing in should be full path
 #                                and the location you throw in should be the root directory
 #                                a.k.a. the search interval this function will scan in
 #                                I do not recommand general location like 'C:\'
-def getHeaders(source, location,headerList = []):
+def getHeaders(source, location, headerList=[]):
     inputHeaderListLen = len(headerList)
     with open(source) as rf:
         sourceContent = rf.readlines()
@@ -86,7 +92,8 @@ def getHeaders(source, location,headerList = []):
         if mo:
             for root, dirs, files in os.walk(location):
                 for file in files:
-                    if os.path.normpath(mo.group(1)) in os.path.join(root, file) and not os.path.join(root, file) in headerList:
+                    if (os.path.normpath(mo.group(1)) in os.path.join(root, file) and 
+                        not os.path.join(root, file) in headerList):
                         print "Appending : %s"%(os.path.join(root, file))
                         headerList.append(os.path.join(root, file))
     modifiedHeaderListLen = len(headerList)
@@ -96,42 +103,38 @@ def getHeaders(source, location,headerList = []):
     elif modifiedHeaderListLen - inputHeaderListLen == 0:
         return headerList
 
-def copyHeaders(szHeaderList, root, copyDestination):
-    for header in szHeaderList:
+def copyHeaders(headerList, root, copyDestination):
+    for header in headerList:
         toWhere = os.path.join(copyDestination, os.path.relpath(header, root))
-        if not os.path.exists(getFileDir(toWhere)):
-            #os.mkdir(getFileDir(toWhere))
-            dir = getFileDir(toWhere)
-            batch = r'md %s'%(dir)
-            os.system(batch)
-        batch = r'copy %s %s'%(header, toWhere)
-        os.system(batch)
-        print batch
-    print 'Done copying'
+        if not os.path.exists(os.path.dirname(toWhere)):
+            os.makedirs(os.path.dirname(toWhere))
+        shutil.copy2(header, toWhere)
+    print "Done copying"
 
 def folderOperation(fileLocation, root, copyDestination):
-    szSourceList = getSourceList(fileLocation)
-    szHeaderList = getHeaderList(szSourceList)
-    copyHeaders(szHeaderList, root, copyDestination)
+    sourceList = getSourceList(fileLocation)
+    headerList = getHeaderList(sourceList, root)
+    copyHeaders(headerList, root, copyDestination)
 
 def solutionOperation(fileLocation, root, copyDestination):
-    szProjectList = getProjects(fileLocation)
-    szSourceList = getProjectsSources(szProjectList)
-    szHeaderList = getHeaderList(szSourceList)
-    copyHeaders(szHeaderList, root, copyDestination)
+    projectList = getProjects(fileLocation)
+    sourceList  = getProjectsSources(projectList)
+    headerList  = getHeaderList(sourceList, root)
+    copyHeaders(headerList, root, copyDestination)
 
 def projectOperation(fileLocation, root, copyDestination):
-    szSourceList = getFiles(fileLocation)
+    sourceList = getFiles(fileLocation)
     #normally a project shouldn't have duplicated C/C++ source files
-    szHeaderList = getHeaderList(szSourceList)
-    copyHeaders(szHeaderList, root, copyDestination)
+    headerList = getHeaderList(sourceList, root)
+    copyHeaders(headerList, root, copyDestination)
 
 def getArgs():
-    parser = argparse.ArgumentParser(prog='HeaderGenerator', usage='%(prog)s [options]',
-                                    description='Generate header files from input location/file')
-    parser.add_argument('-f', dest='location', help='Specify file/folder location')
-    parser.add_argument('-r', dest='root', help='Specify scanning root')
-    parser.add_argument('-d', dest='destination', help='Specify where headers are copying to, if not specified, copy to current location')
+    parser = argparse.ArgumentParser(prog="HeaderGenerator", usage="%(prog)s [options]",
+                                    description="Generate header files from input location/file")
+    
+    parser.add_argument("-f",  dest="location",    help="Specify file/folder location")
+    parser.add_argument("-r",  dest="root",        help="Specify scanning root")
+    parser.add_argument("-d",  dest="destination", help="Specify where headers are copying to, if not specified, copy to current location")
     args = parser.parse_args()
     
     if not args.location or not args.root:
@@ -144,25 +147,29 @@ def getArgs():
     return args.location, args.root, args.destination
 
 def main(fileLocation, root, copyDestination):
-    if isFolder(fileLocation):
+    if determineLocation(fileLocation):
         print "Performing folder operations"
         folderOperation(fileLocation, root, copyDestination)
-    elif isSolution(fileLocation):
+        
+    elif determineLocation(fileLocation, ".sln"):
         print "Performing solution operations"
         solutionOperation(fileLocation, root, copyDestination)
-    elif isProject(fileLocation):
+        
+    elif determineLocation(fileLocation, ".vcxproj"):
         print "Performing project operations"
         projectOperation(fileLocation, root, copyDestination)
+        
     else:
-        print "%s does not fit in any scenario, stopping process..."%(fileLocation)
+        print "%s does not fit in any scenario, exit"%(fileLocation)
         exit(-1)
 
 if __name__ == '__main__':
     fileLocation, root, copyDestination = getArgs()
     #if no destination is passed in, copy to current directory by default.
     if copyDestination == None:
-        copyDestination = getFileDir(fileLocation)+'\\testInclude'
+        copyDestination = os.path.dirname(fileLocation)+'\\testInclude'
+    startTime = time.time()
     print "Start"
     main(fileLocation, root, copyDestination)
     print "Finish"
-    
+    print time.time() - startTime
